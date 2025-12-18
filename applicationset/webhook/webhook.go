@@ -213,6 +213,11 @@ func getGitGeneratorInfo(payload any) *gitGeneratorInfo {
 	case azuredevops.GitPushEvent:
 		// See: https://learn.microsoft.com/en-us/azure/devops/service-hooks/events?view=azure-devops#git.push
 		webURL = payload.Resource.Repository.RemoteURL
+		// Check for empty RefUpdates to prevent panic from malformed webhook payloads
+		// See: https://github.com/argoproj/argo-cd/security/advisories/GHSA-wp4p-9pxh-cgx2
+		if len(payload.Resource.RefUpdates) == 0 {
+			return nil
+		}
 		revision = webhook.ParseRevision(payload.Resource.RefUpdates[0].Name)
 		touchedHead = payload.Resource.RefUpdates[0].Name == payload.Resource.Repository.DefaultBranch
 		// unfortunately, Azure DevOps doesn't provide a list of changed files
