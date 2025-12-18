@@ -274,6 +274,20 @@ func (creds HTTPSCreds) GetClientCertKey() string {
 
 var _ Creds = SSHCreds{}
 
+// isValidProxyHostPort validates that a proxy hostname or port does not contain
+// shell metacharacters that could lead to command injection when used in SSH ProxyCommand.
+// This is critical because the ProxyCommand is executed by a shell.
+func isValidProxyHostPort(s string) bool {
+	// Allow only alphanumeric characters, dots, hyphens, and underscores
+	// This is intentionally restrictive to prevent any shell injection
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
 // SSH implementation
 type SSHCreds struct {
 	sshPrivateKey string
@@ -361,9 +375,21 @@ func (c SSHCreds) Environ() (io.Closer, []string, error) {
 			sshCloser.Close()
 			return nil, nil, fmt.Errorf("failed to set environment variables related to socks5 proxy, could not parse proxy URL '%s': %w", c.proxy, err)
 		}
+		// Validate hostname and port to prevent command injection via shell metacharacters
+		// The ProxyCommand is executed by the shell, so we must ensure no shell metacharacters
+		hostname := parsedProxyURL.Hostname()
+		port := parsedProxyURL.Port()
+		if !isValidProxyHostPort(hostname) {
+			sshCloser.Close()
+			return nil, nil, fmt.Errorf("invalid characters in proxy hostname: %s", hostname)
+		}
+		if port != "" && !isValidProxyHostPort(port) {
+			sshCloser.Close()
+			return nil, nil, fmt.Errorf("invalid characters in proxy port: %s", port)
+		}
 		args = append(args, "-o", fmt.Sprintf("ProxyCommand='connect-proxy -S %s:%s -5 %%h %%p'",
-			parsedProxyURL.Hostname(),
-			parsedProxyURL.Port()))
+			hostname,
+			port))
 		if parsedProxyURL.User != nil {
 			proxyEnv = append(proxyEnv, "SOCKS5_USER="+parsedProxyURL.User.Username())
 			if socks5Passwd, isPasswdSet := parsedProxyURL.User.Password(); isPasswdSet {
