@@ -367,6 +367,54 @@ func Test_SSHCreds_Environ_TempFileCleanupOnInvalidProxyURL(t *testing.T) {
 	}
 }
 
+func TestSSHCredsProxyCommandInjectionPrevention(t *testing.T) {
+	// Test that shell metacharacters in proxy hostname are rejected to prevent command injection
+	// CVE: Command injection via malicious proxy URL in SSH ProxyCommand
+	maliciousProxies := []string{
+		"socks5://evil'$(id):1080",          // Single quote breakout with command substitution
+		"socks5://evil`id`:1080",            // Backtick command substitution (caught by url.Parse)
+		"socks5://evil;id:1080",             // Semicolon command separator
+		"socks5://evil|cat /etc/passwd:1080", // Pipe
+		"socks5://evil$(whoami):1080",       // Command substitution
+		"socks5://evil&id:1080",             // Background command
+		"socks5://evil>/tmp/pwned:1080",    // Redirect
+	}
+
+	for _, proxy := range maliciousProxies {
+		t.Run(proxy, func(t *testing.T) {
+			tempDir := t.TempDir()
+			caFile := path.Join(tempDir, "caFile")
+			err := os.WriteFile(caFile, []byte(""), os.FileMode(0o600))
+			require.NoError(t, err)
+
+			creds := NewSSHCreds("sshPrivateKey", caFile, false, proxy)
+			_, _, err = creds.Environ()
+			// Should either fail URL parsing or fail hostname validation
+			require.Error(t, err, "proxy URL with shell metacharacters should be rejected: %s", proxy)
+		})
+	}
+}
+
+func TestIsValidProxyHostPort(t *testing.T) {
+	// Valid hostnames/ports
+	assert.True(t, isValidProxyHostPort("127.0.0.1"))
+	assert.True(t, isValidProxyHostPort("proxy.example.com"))
+	assert.True(t, isValidProxyHostPort("proxy-server"))
+	assert.True(t, isValidProxyHostPort("proxy_server"))
+	assert.True(t, isValidProxyHostPort("1080"))
+
+	// Invalid - shell metacharacters that could enable command injection
+	assert.False(t, isValidProxyHostPort("evil'$(id)"))
+	assert.False(t, isValidProxyHostPort("evil;id"))
+	assert.False(t, isValidProxyHostPort("evil|id"))
+	assert.False(t, isValidProxyHostPort("evil&id"))
+	assert.False(t, isValidProxyHostPort("evil`id`"))
+	assert.False(t, isValidProxyHostPort("evil$(id)"))
+	assert.False(t, isValidProxyHostPort("evil>file"))
+	assert.False(t, isValidProxyHostPort("evil<file"))
+	assert.False(t, isValidProxyHostPort(""))
+}
+
 const gcpServiceAccountKeyJSON = `{
   "type": "service_account",
   "project_id": "my-google-project",

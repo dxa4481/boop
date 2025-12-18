@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-playground/webhooks/v6/azuredevops"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -801,4 +802,23 @@ func newFakeClient(ns string) *kubefake.Clientset {
 			"server.secretkey": nil,
 		},
 	})
+}
+
+// TestGetGitGeneratorInfo_AzureDevOps_MalformedPayload tests that a malformed Azure DevOps
+// webhook payload with empty RefUpdates does not cause a panic (DoS vulnerability).
+// This is a regression test for a vulnerability similar to GHSA-wp4p-9pxh-cgx2.
+func TestGetGitGeneratorInfo_AzureDevOps_MalformedPayload(t *testing.T) {
+	// This test ensures that sending a malformed Azure DevOps webhook payload
+	// with an empty RefUpdates array does not cause a panic.
+	// An unauthenticated attacker could exploit this to cause denial of service.
+
+	malformedPayload := azuredevops.GitPushEvent{
+		Resource: azuredevops.Resource{
+			RefUpdates: []azuredevops.RefUpdate{}, // Empty - would cause index out of bounds
+		},
+	}
+
+	// This should NOT panic - it should return nil gracefully
+	result := getGitGeneratorInfo(malformedPayload)
+	assert.Nil(t, result, "getGitGeneratorInfo should return nil for malformed payload with empty RefUpdates")
 }
